@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "utils.h": "c",
+        "ioctl_finder_dev_handler.h": "c"
+    }
+}
