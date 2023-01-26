@@ -23,6 +23,4 @@
 #define IOCTL_FINDER_PRNT_ERROR	IOCTL_FINDER_PRNT "[-] " 
 #define IOCTL_FINDER_PRNT_INFO	IOCTL_FINDER_PRNT "[*] "
 
-// bool is_unlocked_ioctl_implemented(const char *f_path);
-
 #endif
