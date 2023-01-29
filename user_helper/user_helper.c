@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
+#include <dirent.h>
+#include <regex.h>
+
 
 //------------------------------------------//
 //                 defines                  //
@@ -17,7 +20,7 @@
 
 #define IO_IOCTL_FINDER _IOWR('I', 0x44, struct ioctl_finder_req)
 
-#define OUTPUT_SIZE  256
+#define OUTPUT_SIZE  512
 
 struct ioctl_finder_res {
     char dev_owner_name[512];
@@ -68,13 +71,77 @@ int get_kernel_symbol(char *output, unsigned long ptr)
     return -1;
 }
 
+int find_ioctl_symbol_src(char *output, const char *symbol, const char *kernel_src)
+{
+    // grep -nH -E "^long tty_ioctl\(struct file.*,*unsigned int.*,*unsigned long.*\)[^;]*$" -r /home/user/Documents/linux | cut -d: -f1,2
+
+    char command[512] = {0};
+    FILE *fp;
+
+    if (!symbol || !kernel_src) {
+        return -1;
+    }
+
+    snprintf(command, 511, "grep -E -n -o \"^.* long %s\\(\\)*\" -r %s | cut -d: -f1,2", symbol, kernel_src);
+
+    fp = popen(command, "r");
+
+    if (!fp) {
+        return -1;
+    }
+
+    if (fgets(output, OUTPUT_SIZE - 1, fp) != NULL) {
+        output[strlen(output) - 1] = 0;
+        pclose(fp);
+        return 0;
+    }
+    else {
+        memset(command, 0, 512);
+        snprintf(command, 511, "grep -E -n -o \"^(static )?.*long %s\\(struct file.*)[^;]*$\" -r %s | cut -d: -f1,2", symbol, kernel_src);
+        fp = popen(command, "r");
+        
+        if (!fp) {
+            return -1;
+        }
+
+        if (fgets(output, OUTPUT_SIZE - 1, fp) != NULL) {
+            output[strlen(output) - 1] = 0;
+            pclose(fp);
+            return 0;
+        }
+    }
+
+    pclose(fp);
+
+    return -1;
+
+}
+
 int main(int argc, char *argv[]) {
+
+    char *kernel_src;
     struct dirent **namelist;
     int n;
-    int fd = open(DEVICE_FILENAME, O_RDWR);
     struct ioctl_finder_req req;
-    char *output_unlocked_command = calloc(OUTPUT_SIZE, sizeof(char));
-    char *output_compat_ommand = calloc(OUTPUT_SIZE, sizeof(char));
+    int fd;
+    char *output_unlocked_symbol;
+    char *output_compat_symbol;
+    char *unlocked_symbol_src = NULL;
+    char *compat_symbol_src = NULL;
+
+    if (argc == 1) {
+        kernel_src = NULL;
+    }
+    else if (argc == 2) {
+        kernel_src = calloc(OUTPUT_SIZE, sizeof(char));
+        snprintf(kernel_src, OUTPUT_SIZE - 1, argv[1]);
+    }
+    else {
+        puts("Usage:\n\t./ioctl_finder_user_helper\n\tor\n\t./ioctl_finder_user_helper <kernel src directory>");
+        exit(-1);
+    }
+
+    fd = open(DEVICE_FILENAME, O_RDWR);
 
     n = scandir("/dev", &namelist, filter, alphasort);
     if (n < 0) {
@@ -88,29 +155,58 @@ int main(int argc, char *argv[]) {
 
             ioctl(fd, IO_IOCTL_FINDER, &req);
 
-            if (get_kernel_symbol(output_unlocked_command, req.response.unlocked_ioctl_p)) {
-                snprintf(output_unlocked_command, 5, "None");
+            output_unlocked_symbol = calloc(OUTPUT_SIZE, sizeof(char));
+            output_compat_symbol = calloc(OUTPUT_SIZE, sizeof(char));
+            unlocked_symbol_src = calloc(OUTPUT_SIZE, sizeof(char));
+            compat_symbol_src = calloc(OUTPUT_SIZE, sizeof(char));
+
+            if (get_kernel_symbol(output_unlocked_symbol, req.response.unlocked_ioctl_p)) {
+                output_unlocked_symbol = NULL;
             }
 
-            if (get_kernel_symbol(output_compat_ommand, req.response.compat_ioctl_p)) {
-                snprintf(output_compat_ommand, 5, "None");
+            if (get_kernel_symbol(output_compat_symbol, req.response.compat_ioctl_p)) {
+                output_compat_symbol = NULL;
             }
 
             if (req.response.unlocked_ioctl_p) {
-                printf("dev: %s\n\tmodule: %s\n\tunlocked_ioctl: %s (0x%lx)\n\tcompact_ioctl: %s (0x%lx)\n", 
+                if (output_unlocked_symbol && kernel_src) {
+                    if (find_ioctl_symbol_src(unlocked_symbol_src, output_unlocked_symbol, kernel_src)) {
+                        unlocked_symbol_src = NULL;
+                    }
+                }
+                if (output_compat_symbol && kernel_src) {
+                    if (find_ioctl_symbol_src(compat_symbol_src, output_compat_symbol, kernel_src)) {
+                        compat_symbol_src = NULL;
+                    }
+                }
+                printf("dev: %s\n\tmodule: %s\n\tunlocked_ioctl: [%s] %s (0x%lx)\n\tcompact_ioctl: [%s] %s (0x%lx)\n\n", 
                         req.dev_path,
-                        req.response.dev_owner_name[0] ? req.response.dev_owner_name : "No owner module", 
-                        output_unlocked_command,
+                        req.response.dev_owner_name[0] ? req.response.dev_owner_name : "No owner module",
+                        unlocked_symbol_src ? unlocked_symbol_src : "-", 
+                        output_unlocked_symbol ? output_unlocked_symbol : "None",
                         req.response.unlocked_ioctl_p,
-                        output_compat_ommand,
+                        compat_symbol_src ? compat_symbol_src : "-", 
+                        output_compat_symbol ? output_compat_symbol : "None",
                         req.response.compat_ioctl_p);
+                if (unlocked_symbol_src) {
+                    free(unlocked_symbol_src);
+                    unlocked_symbol_src = NULL;
+                }
+                if (compat_symbol_src) {
+                    free(compat_symbol_src);
+                    compat_symbol_src = NULL;
+                }
             }
-
-            memset(output_unlocked_command, 0, OUTPUT_SIZE);
-            memset(output_compat_ommand, 0, OUTPUT_SIZE);
-
+            if (output_unlocked_symbol) {
+                memset(output_unlocked_symbol, 0, OUTPUT_SIZE);
+            }
+            if (output_compat_symbol) {
+                memset(output_compat_symbol, 0, OUTPUT_SIZE);
+            }
         }
-        free(namelist);
+        if (namelist) {
+            free(namelist);
+        }
     }
 
     close(fd);
