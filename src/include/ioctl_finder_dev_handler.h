@@ -10,6 +10,7 @@
 struct ioctl_finder_res {
     char dev_owner_name[512];
     unsigned long unlocked_ioctl_p;
+    unsigned long compat_ioctl_p;
 };
 
 struct ioctl_finder_req {

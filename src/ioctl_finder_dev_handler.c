@@ -1,30 +1,5 @@
 #include "include/ioctl_finder_dev_handler.h"
 
-ssize_t ioctl_finder_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
-{
-	// char* path = (char*)kzalloc(len + 1, GFP_KERNEL);
-	// if (path == NULL) {
-	// 	return -ENOMEM;
-	// }
-
-	// /* read data from user buffer to my_data->buffer */
-	// if (copy_from_user(path, buf, len))
-	// 	return -EFAULT;
-
-	// path[len - 1] = 0;
-
-	// if (is_unlocked_ioctl_implemented(path)){
-	// 	printk(KERN_INFO IOCTL_FINDER_PRNT_SUCCESS "Found unclocked_ioctl :)\n");
-	// 	return -244;
-	// }
-	// else {
-	// 	printk(KERN_INFO IOCTL_FINDER_PRNT_ERROR "No unclocked_ioctl here.\n");
-	// 	return len;
-	// }
-
-	return 0;
-}
-
 bool is_unlocked_ioctl_implemented(struct ioctl_finder_req *req)
 {
     struct file *o_file = filp_open(req->dev_path, 0, 0);
@@ -47,6 +22,7 @@ bool is_unlocked_ioctl_implemented(struct ioctl_finder_req *req)
                 strncpy((req->response).dev_owner_name, f_ops->owner->name, sizeof((req->response).dev_owner_name));
             }
             ((req)->response).unlocked_ioctl_p = (unsigned long)f_ops->unlocked_ioctl;
+			((req)->response).compat_ioctl_p = (unsigned long)f_ops->compat_ioctl;
 
             filp_close(o_file, 0);
             return 1;
