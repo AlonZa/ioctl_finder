@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <regex.h>
 
+#include <sys/queue.h>
 
 //------------------------------------------//
 //                 defines                  //
@@ -33,6 +34,14 @@ struct ioctl_finder_req {
     struct ioctl_finder_res response;
 };
 
+struct cache_data_list {
+    char *symbol;
+    char *src;
+
+    LIST_ENTRY(cache_data_list) entries;
+};
+LIST_HEAD(cache_list_head, cache_data_list);
+
 //------------------------------------------//
 
 int filter(const struct dirent *ent) {
@@ -42,7 +51,7 @@ int filter(const struct dirent *ent) {
     return 1;
 }
 
-int get_kernel_symbol(char *output, unsigned long ptr)
+static int get_kernel_symbol(char *output, unsigned long ptr)
 {
     char command[512] = {0};
     FILE *fp;
@@ -71,7 +80,7 @@ int get_kernel_symbol(char *output, unsigned long ptr)
     return -1;
 }
 
-int find_ioctl_symbol_src(char *output, const char *symbol, const char *kernel_src)
+static int find_ioctl_symbol_src(char *output, const char *symbol, const char *kernel_src)
 {
     // grep -nH -E "^long tty_ioctl\(struct file.*,*unsigned int.*,*unsigned long.*\)[^;]*$" -r /home/user/Documents/linux | cut -d: -f1,2
 
@@ -117,6 +126,38 @@ int find_ioctl_symbol_src(char *output, const char *symbol, const char *kernel_s
 
 }
 
+static int cache_append(struct cache_list_head *head,char *symbol, char *src) {
+
+    if (!symbol) {
+        return -1;
+    }
+
+    struct cache_data_list *new_node = (struct cache_data_list *)malloc(sizeof(struct cache_data_list));
+
+    new_node->src = src ? strdup(src) : NULL;
+    new_node->symbol = strdup(symbol);
+
+    LIST_INSERT_HEAD(head, new_node, entries);
+
+    return 0;
+}
+
+static int cache_search(struct cache_list_head *head, const char *symbol, char **src_to_fill) {
+
+    struct cache_data_list *iter;
+    char *tmp = (char *)calloc(OUTPUT_SIZE, sizeof(char));
+
+    LIST_FOREACH(iter, head, entries) {
+        if (strncmp(iter->symbol, symbol, OUTPUT_SIZE) == 0) {
+            *src_to_fill = iter->src ? strdup(iter->src) : NULL;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+
 int main(int argc, char *argv[]) {
 
     char *kernel_src;
@@ -128,13 +169,18 @@ int main(int argc, char *argv[]) {
     char *output_compat_symbol;
     char *unlocked_symbol_src = NULL;
     char *compat_symbol_src = NULL;
+    
+    struct cache_list_head head;
+    LIST_INIT(&head);
+    int search_found_unlocked = 0;
+    int search_found_compat = 0;
 
     if (argc == 1) {
         kernel_src = NULL;
     }
     else if (argc == 2) {
         kernel_src = calloc(OUTPUT_SIZE, sizeof(char));
-        snprintf(kernel_src, OUTPUT_SIZE - 1, argv[1]);
+        strncpy(kernel_src, argv[1], OUTPUT_SIZE - 1);
     }
     else {
         puts("Usage:\n\t./ioctl_finder_user_helper\n\tor\n\t./ioctl_finder_user_helper <kernel src directory>");
@@ -160,26 +206,45 @@ int main(int argc, char *argv[]) {
             unlocked_symbol_src = calloc(OUTPUT_SIZE, sizeof(char));
             compat_symbol_src = calloc(OUTPUT_SIZE, sizeof(char));
 
-            if (get_kernel_symbol(output_unlocked_symbol, req.response.unlocked_ioctl_p)) {
-                output_unlocked_symbol = NULL;
-            }
+            if (req.response.unlocked_ioctl_p || req.response.compat_ioctl_p) {
 
-            if (get_kernel_symbol(output_compat_symbol, req.response.compat_ioctl_p)) {
-                output_compat_symbol = NULL;
-            }
+                if (get_kernel_symbol(output_unlocked_symbol, req.response.unlocked_ioctl_p)) {
+                    output_unlocked_symbol = NULL;
+                }
 
-            if (req.response.unlocked_ioctl_p) {
+                if (get_kernel_symbol(output_compat_symbol, req.response.compat_ioctl_p)) {
+                    output_compat_symbol = NULL;
+                }
+
                 if (output_unlocked_symbol && kernel_src) {
-                    if (find_ioctl_symbol_src(unlocked_symbol_src, output_unlocked_symbol, kernel_src)) {
-                        unlocked_symbol_src = NULL;
+                    search_found_unlocked = cache_search(&head, output_unlocked_symbol, &unlocked_symbol_src);
+                    if (!search_found_unlocked) {
+                        if (find_ioctl_symbol_src(unlocked_symbol_src, output_unlocked_symbol, kernel_src)) {
+                            unlocked_symbol_src = NULL;
+                        }
                     }
                 }
                 if (output_compat_symbol && kernel_src) {
-                    if (find_ioctl_symbol_src(compat_symbol_src, output_compat_symbol, kernel_src)) {
-                        compat_symbol_src = NULL;
+                    search_found_compat = cache_search(&head, output_compat_symbol, &compat_symbol_src);
+                    if (!search_found_compat) {
+                        if (find_ioctl_symbol_src(compat_symbol_src, output_compat_symbol, kernel_src)) {
+                            compat_symbol_src = NULL;
+                        }
                     }
                 }
-                printf("dev: %s\n\tmodule: %s\n\tunlocked_ioctl: [%s] %s (0x%lx)\n\tcompact_ioctl: [%s] %s (0x%lx)\n\n", 
+                if (!search_found_unlocked) {
+                    cache_append(&head, output_unlocked_symbol, unlocked_symbol_src);
+                }
+                else {
+                    search_found_unlocked = 0;
+                }
+                if (!search_found_compat) {
+                    cache_append(&head, output_compat_symbol, compat_symbol_src);
+                }
+                else {
+                    search_found_compat = 0;
+                }
+                printf("dev: %s\n\tmodule: %s\n\tunlocked_ioctl: [%s] %s (0x%lx)\n\tcompat_ioctl: [%s] %s (0x%lx)\n\n", 
                         req.dev_path,
                         req.response.dev_owner_name[0] ? req.response.dev_owner_name : "No owner module",
                         unlocked_symbol_src ? unlocked_symbol_src : "-", 

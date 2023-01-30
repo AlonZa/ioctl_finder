@@ -3,7 +3,7 @@
 bool is_unlocked_ioctl_implemented(struct ioctl_finder_req *req)
 {
     struct file *o_file = filp_open(req->dev_path, 0, 0);
-	struct file_operations *f_ops;
+	const struct file_operations *f_ops;
 
 	if (!IS_ERR_OR_NULL(o_file)) {
 		f_ops = o_file->f_op;
