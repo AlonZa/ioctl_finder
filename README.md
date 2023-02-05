@@ -13,6 +13,7 @@ All the compiled file (kernel module and user helper) will be under the `build/`
 
 Using `root`:
 1. Load the module using - `insmod build/ioctl_finder.ko` <br>
+2. Use the user_helper pragram.
 Usage:<br>
 2.1. Run the user helper to get information on all the devices under `/dev` - `./build/ioctl_finder_user_helper`<br>
 2.2 To get a source code location of the `ioctl()`, you may add the linux sources path to the execution command as such:<br>
